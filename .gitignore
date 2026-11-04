@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.streamlit/secrets.toml
+
+datasets/
+output/*.json
+reports/*.pdf
+
+.DS_Store
