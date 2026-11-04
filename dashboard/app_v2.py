@@ -4,16 +4,15 @@ import subprocess
 import sys
 
 from pathlib import Path
-from collections import defaultdict
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
 
-# =====================================================
+# =========================================================
 # CONFIGURATION
-# =====================================================
+# =========================================================
 
 BASE = Path.home() / "KaliSOC"
 OUTPUT = BASE / "output"
@@ -26,9 +25,11 @@ FILES = {
     "CLM Registry": OUTPUT / "alerts.json",
     "PowerShell Detection": OUTPUT / "powershell-alerts.json",
     "Account Monitoring": OUTPUT / "account-alerts.json",
+    "Sigma Detection": OUTPUT / "sigma-alerts.json",
 }
 
 SEVERITY_ORDER = {
+    "Not classified": -1,
     "Informational": 0,
     "Low": 1,
     "Medium": 2,
@@ -42,12 +43,13 @@ MITRE_NAMES = {
     "T1056": "Input Capture",
     "T1027": "Obfuscated Files or Information",
     "T1136.002": "Domain Account",
+    "T1021": "Remote Services",
 }
 
 
-# =====================================================
+# =========================================================
 # DATA LOADING
-# =====================================================
+# =========================================================
 
 def load_alerts():
 
@@ -98,8 +100,8 @@ def load_alerts():
                     or ""
                 )
 
-                # Correlate using computer and Process GUID.
-                # Without a GUID, keep each alert separate.
+                # Correlate only when a Process GUID exists.
+                # Records without a GUID remain separate.
                 if process_guid:
 
                     event_key = f"{computer}|{process_guid}"
@@ -117,6 +119,16 @@ def load_alerts():
                 if not isinstance(mitre, list):
                     mitre = [str(mitre)] if mitre else []
 
+                sigma_tags = alert.get("sigma_tags", [])
+
+                if not isinstance(sigma_tags, list):
+                    sigma_tags = []
+
+                references = alert.get("references", [])
+
+                if not isinstance(references, list):
+                    references = []
+
                 actor = (
                     alert.get("user")
                     or alert.get("created_by")
@@ -128,7 +140,9 @@ def load_alerts():
                 evidence = (
                     alert.get("command_line_preview")
                     or alert.get("description")
-                    or " | ".join(alert.get("findings", []))
+                    or " | ".join(
+                        alert.get("findings", [])
+                    )
                     or ""
                 )
 
@@ -176,6 +190,27 @@ def load_alerts():
 
                     "Evidence": evidence,
 
+                    # Sigma-specific fields
+                    "Sigma Rule ID": alert.get(
+                        "sigma_rule_id", ""
+                    ),
+
+                    "Sigma Level": alert.get(
+                        "sigma_level", ""
+                    ),
+
+                    "Sigma Status": alert.get(
+                        "sigma_status", ""
+                    ),
+
+                    "Sigma Tags": sigma_tags,
+
+                    "References": references,
+
+                    "Source Log": alert.get(
+                        "source_log", ""
+                    ),
+
                 })
 
         except (OSError, json.JSONDecodeError) as error:
@@ -185,9 +220,9 @@ def load_alerts():
     return pd.DataFrame(records), sources
 
 
-# =====================================================
+# =========================================================
 # INCIDENT CORRELATION
-# =====================================================
+# =========================================================
 
 def correlate_incidents(data):
 
@@ -253,9 +288,9 @@ def correlate_incidents(data):
     return pd.DataFrame(incidents)
 
 
-# =====================================================
+# =========================================================
 # PAGE CONFIGURATION
-# =====================================================
+# =========================================================
 
 st.set_page_config(
     page_title="KaliSOC V2 | Advanced SOC",
@@ -265,9 +300,9 @@ st.set_page_config(
 )
 
 
-# =====================================================
+# =========================================================
 # HEADER
-# =====================================================
+# =========================================================
 
 st.title("🛡️ KaliSOC V2")
 
@@ -279,9 +314,9 @@ st.caption(
 st.markdown("---")
 
 
-# =====================================================
+# =========================================================
 # DATA REFRESH
-# =====================================================
+# =========================================================
 
 if st.button("🔄 Refresh Security Data"):
 
@@ -300,15 +335,15 @@ if df.empty:
     st.stop()
 
 
-# =====================================================
+# =========================================================
 # SIDEBAR
-# =====================================================
+# =========================================================
 
 st.sidebar.title("🛡️ KaliSOC V2")
 
 st.sidebar.caption("SOC Analyst Console")
 
-st.sidebar.subheader("Data Sources")
+st.sidebar.subheader("Connected Data Sources")
 
 for name, status in sources.items():
 
@@ -340,22 +375,52 @@ selected_modules = st.sidebar.multiselect(
     default=module_options
 )
 
+search_query = st.sidebar.text_input(
+    "Search alerts",
+    placeholder="Process, user, event, computer..."
+)
 
-# =====================================================
+
+# =========================================================
 # FILTER DATA
-# =====================================================
+# =========================================================
 
 filtered = df[
     df["Severity"].isin(selected_severity)
     & df["Module"].isin(selected_modules)
 ].copy()
 
+if search_query.strip():
+
+    searchable = (
+        filtered["Detection"].astype(str)
+        + " "
+        + filtered["Computer"].astype(str)
+        + " "
+        + filtered["Actor"].astype(str)
+        + " "
+        + filtered["Process"].astype(str)
+        + " "
+        + filtered["Target"].astype(str)
+        + " "
+        + filtered["Event ID"].astype(str)
+    )
+
+    filtered = filtered[
+        searchable.str.contains(
+            search_query,
+            case=False,
+            na=False,
+            regex=False
+        )
+    ].copy()
+
 incidents = correlate_incidents(filtered)
 
 
-# =====================================================
+# =========================================================
 # SECURITY METRICS
-# =====================================================
+# =========================================================
 
 st.subheader("Security Overview")
 
@@ -391,15 +456,14 @@ c4.metric("Medium Severity", medium)
 
 c5.metric("Critical", critical)
 
-
 st.markdown("---")
 
 
-# =====================================================
+# =========================================================
 # NAVIGATION TABS
-# =====================================================
+# =========================================================
 
-overview, incident_tab, timeline_tab, mitre_tab, export_tab = st.tabs([
+overview, incident_tab, timeline_tab, mitre_tab, sigma_tab, export_tab = st.tabs([
 
     "📊 Overview",
 
@@ -409,92 +473,96 @@ overview, incident_tab, timeline_tab, mitre_tab, export_tab = st.tabs([
 
     "🎯 MITRE ATT&CK",
 
+    "🧩 Sigma Center",
+
     "📁 Export",
 
 ])
 
 
-# =====================================================
+# =========================================================
 # TAB 1 - OVERVIEW
-# =====================================================
+# =========================================================
 
 with overview:
 
     st.subheader("Detection Analytics")
 
-    left, right = st.columns(2)
+    if filtered.empty:
 
-    with left:
+        st.info("No alerts match the selected filters.")
 
-        module_data = (
-            filtered["Module"]
-            .value_counts()
-            .reset_index()
+    else:
+
+        left, right = st.columns(2)
+
+        with left:
+
+            module_data = (
+                filtered["Module"]
+                .value_counts()
+                .reset_index()
+            )
+
+            module_data.columns = ["Module", "Count"]
+
+            fig = px.bar(
+                module_data,
+                x="Module",
+                y="Count",
+                text="Count",
+                title="Detection Matches by Module",
+            )
+
+            st.plotly_chart(
+                fig,
+                use_container_width=True
+            )
+
+        with right:
+
+            severity_data = (
+                filtered["Severity"]
+                .value_counts()
+                .reset_index()
+            )
+
+            severity_data.columns = ["Severity", "Count"]
+
+            fig = px.pie(
+                severity_data,
+                names="Severity",
+                values="Count",
+                hole=0.48,
+                title="Severity Distribution",
+            )
+
+            st.plotly_chart(
+                fig,
+                use_container_width=True
+            )
+
+        st.markdown("---")
+
+        st.subheader("Latest Security Alerts")
+
+        st.dataframe(
+            filtered[[
+                "Alert ID",
+                "Module",
+                "Detection",
+                "Severity",
+                "Computer",
+                "Timestamp",
+            ]],
+            use_container_width=True,
+            hide_index=True
         )
 
-        module_data.columns = ["Module", "Count"]
 
-        fig = px.bar(
-            module_data,
-            x="Module",
-            y="Count",
-            text="Count",
-            title="Detection Matches by Module",
-        )
-
-        st.plotly_chart(
-            fig,
-            use_container_width=True
-        )
-
-    with right:
-
-        severity_data = (
-            filtered["Severity"]
-            .value_counts()
-            .reset_index()
-        )
-
-        severity_data.columns = ["Severity", "Count"]
-
-        fig = px.pie(
-            severity_data,
-            names="Severity",
-            values="Count",
-            hole=0.48,
-            title="Severity Distribution",
-        )
-
-        st.plotly_chart(
-            fig,
-            use_container_width=True
-        )
-
-    st.markdown("---")
-
-    st.subheader("Latest Security Alerts")
-
-    st.dataframe(
-
-        filtered[[
-            "Alert ID",
-            "Module",
-            "Detection",
-            "Severity",
-            "Computer",
-            "Timestamp",
-        ]],
-
-        use_container_width=True,
-
-        hide_index=True,
-
-    )
-
-
-# =====================================================
+# =========================================================
 # TAB 2 - INCIDENT INVESTIGATION
-# =====================================================
+# =========================================================
 
 with incident_tab:
 
@@ -502,20 +570,16 @@ with incident_tab:
 
     st.caption(
         "Events sharing a computer and Process GUID "
-        "are grouped together. Records without a "
-        "Process GUID remain separate."
+        "are grouped together. Records without a Process GUID "
+        "remain separate."
     )
 
     if not incidents.empty:
 
         st.dataframe(
-
             incidents.drop(columns=["Event Key"]),
-
             use_container_width=True,
-
-            hide_index=True,
-
+            hide_index=True
         )
 
         selected_key = st.selectbox(
@@ -529,20 +593,41 @@ with incident_tab:
 
         st.markdown("### Investigation Evidence")
 
-        st.json(
-            details.drop(
-                columns=["Event Key"]
-            ).to_dict(orient="records")
-        )
+        for _, row in details.iterrows():
+
+            with st.expander(
+                f"{row['Alert ID']} - {row['Detection']}"
+            ):
+
+                st.write("**Severity:**", row["Severity"])
+
+                st.write("**Confidence:**", row["Confidence"])
+
+                st.write("**Computer:**", row["Computer"])
+
+                st.write("**Actor:**", row["Actor"])
+
+                st.write("**Process:**", row["Process"])
+
+                st.write("**Target:**", row["Target"])
+
+                st.write("**Event ID:**", row["Event ID"])
+
+                st.write("**Status:**", row["Status"])
+
+                st.write("**MITRE:**", ", ".join(row["MITRE"]))
+
+                if row["Evidence"]:
+                    st.code(row["Evidence"])
 
     else:
 
         st.info("No matching incident groups.")
 
 
-# =====================================================
+# =========================================================
 # TAB 3 - TIMELINE
-# =====================================================
+# =========================================================
 
 with timeline_tab:
 
@@ -591,7 +676,6 @@ with timeline_tab:
         st.subheader("Event History")
 
         st.dataframe(
-
             timeline.sort_values(
                 "_time",
                 ascending=False
@@ -602,11 +686,8 @@ with timeline_tab:
                 "Severity",
                 "Computer",
             ]],
-
             use_container_width=True,
-
-            hide_index=True,
-
+            hide_index=True
         )
 
     else:
@@ -614,17 +695,17 @@ with timeline_tab:
         st.info("No valid timestamps available.")
 
 
-# =====================================================
+# =========================================================
 # TAB 4 - MITRE ATT&CK
-# =====================================================
+# =========================================================
 
 with mitre_tab:
 
     st.subheader("MITRE ATT&CK Mapping")
 
     st.caption(
-        "Candidate technique references from detection rules. "
-        "These are not confirmed attack techniques."
+        "Candidate technique references supplied by "
+        "detection rules. These require analyst validation."
     )
 
     technique_records = []
@@ -664,13 +745,9 @@ with mitre_tab:
         )
 
         st.dataframe(
-
             technique_df,
-
             use_container_width=True,
-
-            hide_index=True,
-
+            hide_index=True
         )
 
     else:
@@ -678,9 +755,227 @@ with mitre_tab:
         st.info("No MITRE ATT&CK references available.")
 
 
-# =====================================================
-# TAB 5 - EXPORT AND PDF REPORT
-# =====================================================
+# =========================================================
+# TAB 5 - SIGMA DETECTION CENTER
+# =========================================================
+
+with sigma_tab:
+
+    st.subheader("🧩 Sigma Detection Center")
+
+    st.caption(
+        "Official SigmaHQ and custom Sigma rule matches "
+        "collected through Chainsaw."
+    )
+
+    sigma_df = filtered[
+        filtered["Module"] == "Sigma Detection"
+    ].copy()
+
+    if sigma_df.empty:
+
+        st.warning(
+            "No Sigma records available under the current filters. "
+            "Check that sigma-alerts.json exists and Sigma Detection "
+            "is selected in the sidebar."
+        )
+
+    else:
+
+        # Sigma metrics
+
+        sigma_total = len(sigma_df)
+
+        sigma_rules = sigma_df[
+            "Sigma Rule ID"
+        ].replace("", pd.NA).nunique()
+
+        sigma_computers = sigma_df[
+            "Computer"
+        ].nunique()
+
+        s1, s2, s3 = st.columns(3)
+
+        s1.metric("Sigma Matches", sigma_total)
+
+        s2.metric("Distinct Rule IDs", sigma_rules)
+
+        s3.metric("Affected Computers", sigma_computers)
+
+        st.divider()
+
+        # Rule distribution
+
+        st.subheader("Sigma Rule Analytics")
+
+        rule_counts = (
+            sigma_df["Detection"]
+            .value_counts()
+            .reset_index()
+        )
+
+        rule_counts.columns = ["Sigma Rule", "Matches"]
+
+        left, right = st.columns(2)
+
+        with left:
+
+            fig = px.bar(
+                rule_counts.head(15),
+                x="Matches",
+                y="Sigma Rule",
+                orientation="h",
+                title="Top Sigma Rules",
+            )
+
+            st.plotly_chart(
+                fig,
+                use_container_width=True
+            )
+
+        with right:
+
+            level_counts = (
+                sigma_df["Sigma Level"]
+                .replace("", "Not specified")
+                .value_counts()
+                .reset_index()
+            )
+
+            level_counts.columns = ["Rule Level", "Matches"]
+
+            fig = px.pie(
+                level_counts,
+                names="Rule Level",
+                values="Matches",
+                title="Sigma Rule Level Distribution",
+                hole=0.45,
+            )
+
+            st.plotly_chart(
+                fig,
+                use_container_width=True
+            )
+
+        st.divider()
+
+        # Sigma rule details
+
+        st.subheader("Sigma Detection Results")
+
+        display_sigma = sigma_df.copy()
+
+        display_sigma["MITRE Techniques"] = (
+            display_sigma["MITRE"].apply(
+                lambda values: ", ".join(values)
+            )
+        )
+
+        display_sigma["Sigma Tags"] = (
+            display_sigma["Sigma Tags"].apply(
+                lambda values: ", ".join(values)
+            )
+        )
+
+        st.dataframe(
+            display_sigma[[
+                "Alert ID",
+                "Detection",
+                "Sigma Rule ID",
+                "Sigma Level",
+                "Severity",
+                "Event ID",
+                "Computer",
+                "Timestamp",
+                "MITRE Techniques",
+            ]],
+            use_container_width=True,
+            hide_index=True
+        )
+
+        st.divider()
+
+        # Individual rule investigation
+
+        st.subheader("Sigma Rule Investigation")
+
+        selected_sigma = st.selectbox(
+            "Select a Sigma detection",
+            sigma_df.index.tolist(),
+            format_func=lambda index: (
+                str(sigma_df.loc[index, "Detection"])
+                + " | "
+                + str(sigma_df.loc[index, "Alert ID"])
+            )
+        )
+
+        selected = sigma_df.loc[selected_sigma]
+
+        a, b = st.columns(2)
+
+        with a:
+
+            st.write("**Rule Name:**", selected["Detection"])
+
+            st.write("**Rule ID:**", selected["Sigma Rule ID"])
+
+            st.write("**Rule Level:**", selected["Sigma Level"])
+
+            st.write("**Rule Status:**", selected["Sigma Status"])
+
+            st.write("**Windows Event ID:**", selected["Event ID"])
+
+        with b:
+
+            st.write("**Computer:**", selected["Computer"])
+
+            st.write("**Process:**", selected["Process"])
+
+            st.write("**Timestamp:**", selected["Timestamp"])
+
+            st.write("**Source Log:**", selected["Source Log"])
+
+            st.write("**MITRE:**", ", ".join(selected["MITRE"]))
+
+        st.write("**Investigation Status:**", selected["Status"])
+
+        if selected["Evidence"]:
+
+            with st.expander("View event evidence"):
+
+                st.code(selected["Evidence"])
+
+        if selected["References"]:
+
+            st.markdown("**Rule References:**")
+
+            for reference in selected["References"]:
+
+                st.markdown(f"- {reference}")
+
+        if selected["Sigma Tags"]:
+
+            st.markdown("**Sigma Tags:**")
+
+            st.write(", ".join(selected["Sigma Tags"]))
+
+        # Export Sigma-only records
+
+        sigma_csv = display_sigma.to_csv(
+            index=False
+        ).encode("utf-8")
+
+        st.download_button(
+            "Download Sigma Detection Results",
+            sigma_csv,
+            file_name="KaliSOC_Sigma_Detections.csv",
+            mime="text/csv",
+        )
+
+
+# =========================================================
+# TAB 6 - EXPORT AND PDF REPORT
+# =========================================================
 
 with export_tab:
 
@@ -689,8 +984,8 @@ with export_tab:
     st.markdown("### PDF Incident Report")
 
     st.write(
-        "Generate a professional PDF report containing "
-        "your security findings, evidence, severity and "
+        "Generate a professional PDF containing the latest "
+        "security findings, evidence, Sigma detections and "
         "MITRE ATT&CK references."
     )
 
@@ -703,8 +998,7 @@ with export_tab:
         if not REPORT_SCRIPT.exists():
 
             st.error(
-                "PDF report generator was not found:\n"
-                f"{REPORT_SCRIPT}"
+                f"PDF generator not found: {REPORT_SCRIPT}"
             )
 
         else:
@@ -750,7 +1044,7 @@ with export_tab:
 
                 else:
 
-                    st.error("PDF generation failed.")
+                    st.error("PDF report generation failed.")
 
                     if result.stderr:
                         st.code(result.stderr)
@@ -760,38 +1054,26 @@ with export_tab:
 
             except subprocess.TimeoutExpired:
 
-                st.error(
-                    "PDF generation timed out."
-                )
+                st.error("PDF generation timed out.")
 
             except OSError as error:
 
-                st.error(
-                    f"Unable to generate PDF: {error}"
-                )
+                st.error(f"Unable to generate report: {error}")
 
     st.divider()
 
     if PDF_PATH.exists():
 
-        st.success(
-            "A PDF report is available."
-        )
+        st.success("A PDF investigation report is available.")
 
         pdf_bytes = PDF_PATH.read_bytes()
 
         st.download_button(
-
-            label="⬇️ Download KaliSOC PDF Report",
-
+            "⬇️ Download KaliSOC PDF Report",
             data=pdf_bytes,
-
             file_name="KaliSOC_Incident_Report.pdf",
-
             mime="application/pdf",
-
             use_container_width=True,
-
         )
 
         st.caption(
@@ -799,9 +1081,8 @@ with export_tab:
         )
 
         st.caption(
-            "The download contains the latest successfully "
-            "generated PDF. Generate a new report after "
-            "changing detection data."
+            "The PDF includes all configured JSON data sources. "
+            "Generate a fresh report after updating the source files."
         )
 
     else:
@@ -823,48 +1104,41 @@ with export_tab:
         ).encode("utf-8")
 
         st.download_button(
-
-            label="Download Incident Report CSV",
-
-            data=incident_csv,
-
+            "Download Incident Report CSV",
+            incident_csv,
             file_name="KaliSOC_Incidents.csv",
-
             mime="text/csv",
-
         )
 
     alert_csv = filtered.drop(
         columns=["Event Key", "MITRE"]
+    ).drop(
+        columns=["Sigma Tags", "References"]
     ).to_csv(
         index=False
     ).encode("utf-8")
 
     st.download_button(
-
-        label="Download Detection Records CSV",
-
-        data=alert_csv,
-
+        "Download All Detection Records CSV",
+        alert_csv,
         file_name="KaliSOC_Alerts.csv",
-
         mime="text/csv",
-
     )
 
 
-# =====================================================
+# =========================================================
 # FOOTER
-# =====================================================
+# =========================================================
 
 st.markdown("---")
 
 st.caption(
     "KaliSOC V2 | Windows Threat Hunting | "
-    "Digital Forensics | Incident Investigation"
+    "Digital Forensics | Sigma Detection | Incident Investigation"
 )
 
 st.caption(
-    "Data source: Historical forensic datasets. "
+    "Analysis based on historical forensic datasets. "
     "Detection matches require analyst validation."
 )
+

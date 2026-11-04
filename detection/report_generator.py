@@ -33,6 +33,7 @@ SOURCES = {
     "CLM Registry": OUTPUT / "alerts.json",
     "PowerShell Detection": OUTPUT / "powershell-alerts.json",
     "Account Monitoring": OUTPUT / "account-alerts.json",
+    "Sigma Detection": OUTPUT / "sigma-alerts.json",
 }
 
 SEVERITY_ORDER = {

@@ -1,11 +1,34 @@
 .venv/
-__pycache__/
-*.pyc
-.env
-.streamlit/secrets.toml
-
+.volatility-venv/
+.external/
 datasets/
 output/*.json
 reports/*.pdf
+__pycache__/
+*.pyc
+.env
 
-.DS_Store
+# Third-party repositories
+.external/
+chainsaw-source/
+sigma/
+
+# Local datasets and forensic workspace
+datasets/
+memory/
+
+# Generated analysis results
+output/
+
+# Generated reports
+reports/*.pdf
+
+# Python environments
+.venv/
+.volatility-venv/
+__pycache__/
+*.pyc
+
+# Secrets
+.env
+.streamlit/secrets.toml

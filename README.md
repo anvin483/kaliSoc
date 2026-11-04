@@ -317,4 +317,100 @@ Developed as a cybersecurity portfolio project focused on:
 - Detection Engineering
 - Security Monitoring
 
+
+## 🧩 Sigma Detection Integration
+
+KaliSOC integrates the Sigma rule format with Chainsaw to perform standardized Windows threat hunting.
+
+### Features
+
+- Official SigmaHQ detection rule integration.
+- Custom YAML-based Sigma detection rules.
+- Windows EVTX analysis using Chainsaw.
+- Process creation and PowerShell detection.
+- Sigma rule severity classification.
+- MITRE ATT&CK technique references.
+- JSON-based Sigma alert normalization.
+- Sigma Detection Center in the Streamlit dashboard.
+- Sigma findings included in PDF investigation reports.
+
+### Sigma Technologies
+
+| Tool | Purpose |
+|---|---|
+| SigmaHQ | Standardized detection rules |
+| Chainsaw | Sigma-based Windows event hunting |
+| YAML | Detection rule definitions |
+| Python | Alert normalization |
+| Streamlit | Sigma analytics dashboard |
+
+### Custom Sigma Rule
+
+Location:
+
+```text
+rules/custom/ksoc_hidden_powershell.yml
+```
+
+The custom rule detects PowerShell launched with hidden-window arguments.
+
+### Run Sigma Hunting
+
+```bash
+chainsaw hunt \
+datasets/EVTX-ATTACK-SAMPLES \
+-s rules/custom \
+-m .external/chainsaw-source/mappings/sigma-event-logs-all.yml \
+--json -q --skip-errors \
+> output/sigma-custom-hunt.json
+```
+
+### Run Official SigmaHQ Rules
+
+```bash
+chainsaw hunt \
+datasets/EVTX-ATTACK-SAMPLES \
+-s .external/sigma/rules/windows/process_creation \
+-m .external/chainsaw-source/mappings/sigma-event-logs-all.yml \
+--json -q --skip-errors \
+> output/sigma-official-hunt.json
+```
+
+### Import Sigma Results
+
+```bash
+python3 detection/sigma_importer.py
+```
+
+Normalized results are stored in:
+
+```text
+output/sigma-alerts.json
+```
+
+### Dashboard Integration
+
+The Sigma Detection Center displays:
+
+- Total Sigma detection matches.
+- Distinct Sigma rule IDs.
+- Affected computers.
+- Rule-wise analytics.
+- Sigma severity distribution.
+- Individual rule investigation.
+- MITRE ATT&CK references.
+- Downloadable CSV results.
+
+### Sample Dataset Results
+
+In the current EVTX dataset run:
+
+| Detection source | Matches |
+|---|---:|
+| Official Sigma hunt | 612 |
+| Custom Sigma rule test | 2 |
+
+These are detection matches, not confirmed attacks or unique incidents. Every finding requires analyst validation.
+
 **KaliSOC – Turning Windows Security Logs into Actionable Investigation Findings.**
+
